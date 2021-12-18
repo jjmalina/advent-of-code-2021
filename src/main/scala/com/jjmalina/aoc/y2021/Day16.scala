@@ -32,8 +32,16 @@ object Day16 extends AOCApp(2021, 16) {
     def version: Int
     def typeId: Int
   }
-  case class LiteralPacket(version: Int, typeId: Int, literal: BigInt) extends Packet
-  case class OperatorPacket(version: Int, typeId: Int, lengthTypeId: Int) extends Packet
+  case class LiteralPacket(
+    version: Int,
+    typeId: Int, literal: BigInt
+  ) extends Packet
+  case class OperatorPacket(
+    version: Int,
+    typeId: Int,
+    lengthTypeId: Int,
+    subpackets: List[Packet]
+  ) extends Packet
 
   def hex2bin(s: String): String = s.map(Hex2Bin(_)).mkString
 
@@ -75,24 +83,33 @@ object Day16 extends AOCApp(2021, 16) {
     val (lengthTypeId, rest) = parseLengthTypeId(s)
     if (lengthTypeId == "0") {
       val (subPacketsBitLength, remainder) = (rest.take(15), rest.drop(15))
+      val nBits = Integer.parseInt(subPacketsBitLength, 2)
+      val (subpacketBits, remainingBits) = (remainder.take(nBits), remainder.drop(nBits))
+      val (subpackets, _) = parse(subpacketBits)
+      val operatorPacket = OperatorPacket(
+        version, typeId, lengthTypeId.toInt, subpackets
+      )
       (
-        OperatorPacket(version, typeId, lengthTypeId.toInt),
-        remainder
+        operatorPacket,
+        remainingBits
       )
     } else {
-      val (numberOfSubPackets, remainder) = (rest.take(11), rest.drop(11))
+      val (numberOfSubPacketsBits, remainder) = (rest.take(11), rest.drop(11))
+      val subpacketsCount = Integer.parseInt(numberOfSubPacketsBits, 2)
+      val (subpackets, remainingBits) = parse(remainder, Some(subpacketsCount))
       (
-        OperatorPacket(version, typeId, lengthTypeId.toInt),
-        remainder
+        OperatorPacket(version, typeId, lengthTypeId.toInt, subpackets),
+        remainingBits
       )
     }
-
   }
 
-  def parse(s: String): List[Packet] = {
-    def loop(packets: List[Packet], s: String): List[Packet] = {
+  def parse(s: String, nPackets: Option[Int] = None): (List[Packet], String) = {
+    def loop(packets: List[Packet], s: String): (List[Packet], String) = {
       if (s.length < 7) {
-        packets
+        (packets, s)
+      } else if (nPackets.isDefined && nPackets.map(_ == packets.length).getOrElse(false)) {
+        (packets, s)
       } else {
         val (version, typeId, remainder) = parsePacketVersionAndTypeId(s)
         val (packet, rest) = if (typeId == 4) {
@@ -106,9 +123,41 @@ object Day16 extends AOCApp(2021, 16) {
     loop(List(), s)
   }
 
+  def getVersions(p: Packet): List[Int] = p match {
+    case LiteralPacket(version, typeId, literal) => List(version)
+    case OperatorPacket(version, typeId, lengthTypeId, subpackets) => {
+      List(version) ++ subpackets.flatMap(getVersions(_))
+    }
+  }
+
+  def getVersionSum(packets: List[Packet]): Int =
+    packets.flatMap(getVersions(_)).sum
+
+  def evaluatePacket(p: Packet): BigInt = p match {
+    case LiteralPacket(version, typeId, literal) => literal
+    case OperatorPacket(version, typeId, lengthTypeId, subpackets) => {
+      val values = evaluate(subpackets)
+      typeId match {
+        case 0 => values.sum
+        case 1 => values.reduce(_ * _)
+        case 2 => values.min
+        case 3 => values.max
+        case 5 => if (values(0) > values(1)) 1 else 0
+        case 6 => if (values(0) < values(1)) 1 else 0
+        case 7 => if (values(0) == values(1)) 1 else 0
+        case _ => throw new Exception("undefined type id")
+      }
+    }
+  }
+
+  def evaluate(packets: List[Packet]): List[BigInt] = packets.map(evaluatePacket)
+
   override def part1(input: Stream[IO, String]): IO[String] =
     input.through(text.lines).filter(_.length > 0).compile.toList.map(lines =>
-      parse(lines.head).map(_.version).sum.toString
+      getVersionSum(parse(lines.head)._1).toString
     )
-  override def part2(input: Stream[IO, String]): IO[String] = ???
+  override def part2(input: Stream[IO, String]): IO[String] =
+    input.through(text.lines).filter(_.length > 0).compile.toList.map(lines =>
+      evaluate(parse(lines.head)._1).toString
+    )
 }
